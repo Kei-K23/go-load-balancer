@@ -41,6 +41,7 @@ vendor/
 go.sum
 bin
 logs
+results.jtl
 
 .env
 services.list
