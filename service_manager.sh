@@ -4,7 +4,7 @@
 PROJECT_ROOT=$(pwd)
 BIN_DIR="$PROJECT_ROOT/bin"
 LOG_DIR="$PROJECT_ROOT/logs"
-SERVICES=("loadbalancer" "server1" "server2" "server3")
+SERVICES_FILE="$PROJECT_ROOT/services.list"
 
 # Function to build all services
 build_services() {

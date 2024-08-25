@@ -41,7 +41,10 @@ import (
     "net/http"
 )
 
-const PORT = ":$PORT"
+const (
+	PORT        = ":$PORT"
+	SERVER_NAME = ":$SERVER_NAME"
+)
 
 func main() {
 
@@ -90,6 +93,12 @@ if ! grep -q "$SERVER_NAME" "$SERVICES_FILE"; then
     echo "$SERVER_NAME added to the services list."
 else
     echo "$SERVER_NAME already exists in the services list."
+fi
+
+# Ensure the loadbalancer service is present in the SERVICES_FILE
+if ! grep -q "loadbalancer" "$SERVICES_FILE"; then
+    echo "loadbalancer" >> "$SERVICES_FILE"
+    echo "loadbalancer added to the services list."
 fi
 
 echo "Setup complete. You can now build and start $SERVER_NAME."
