@@ -24,6 +24,7 @@ func main() {
 	serverPool.AddServer(loadbalancer.NewServer("http://localhost:8081"))
 	serverPool.AddServer(loadbalancer.NewServer("http://localhost:8082"))
 	serverPool.AddServer(loadbalancer.NewServer("http://localhost:8083"))
+	// add more backend servers here
 
 	ctx, cancel := context.WithCancel(context.Background())
 
