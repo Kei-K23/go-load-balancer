@@ -10,7 +10,7 @@ SERVICES=("loadbalancer" "server1" "server2" "server3")
 build_services() {
     echo "Building services..."
     mkdir -p $BIN_DIR
-    for service in "${SERVICES[@]}"; do
+    while IFS= read -r service; do
         if [ "$service" == "loadbalancer" ]; then
             # Build the load balancer which is located in the root directory
             echo "Building load balancer..."
@@ -25,7 +25,7 @@ build_services() {
             echo "Build failed for $service!"
             exit 1
         fi
-    done
+    done < "$SERVICES_FILE"
     echo "All services built successfully."
 }
 
