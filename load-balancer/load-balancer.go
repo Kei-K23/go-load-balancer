@@ -205,7 +205,7 @@ func (sp *ServerPool) CheckServerHealth(server *Server) {
 		server.FailureCount++
 		if server.FailureCount >= server.BreakerThreshold {
 			server.TripCircuitBreaker()
-			sp.Logger.Warn("Server tripped circuit breaker", fmt.Sprintf("server: %s", server.Address))
+			sp.Logger.Warn(fmt.Sprintf("Server tripped circuit breaker: %s", server.Address))
 		}
 	} else {
 		server.SetAlive(true)
@@ -241,12 +241,12 @@ func (sp *ServerPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	startTime := time.Now()
 
-	sp.Logger.Info("Forwarding request", fmt.Sprintf("server", server.Address))
+	sp.Logger.Info(fmt.Sprintf("Forwarding request to server: %s", server.Address))
 
 	proxyReq, err := http.NewRequest(r.Method, server.Address+r.RequestURI, r.Body)
 	if err != nil {
 		http.Error(w, "Server unavailable", http.StatusServiceUnavailable)
-		sp.Logger.Error("Failed to create proxy request", fmt.Sprintf("%s", err))
+		sp.Logger.Error(fmt.Sprintf("Failed to create proxy request: %s", err))
 		return
 	}
 
@@ -260,7 +260,7 @@ func (sp *ServerPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			server.TripCircuitBreaker()
 		}
 		http.Error(w, "Server unavailable", http.StatusServiceUnavailable)
-		sp.Logger.Error("Failed to forward request", fmt.Sprintf("%s", err))
+		sp.Logger.Error(fmt.Sprintf("Failed to forward request: %s", err))
 		return
 	}
 	defer resp.Body.Close()

@@ -19,7 +19,6 @@ func NewLogger() *Logger {
 		errorLogger: log.New(os.Stderr, "ERROR: ", log.Ldate|log.Ltime|log.Lshortfile),
 	}
 }
-
 func (l *Logger) Info(msg string, args ...interface{}) {
 	l.infoLogger.Output(2, fmt.Sprintf(msg, args...))
 }

@@ -36,10 +36,9 @@ cat <<EOL > "$PROJECT_ROOT/$SERVER_NAME/main.go"
 package main
 
 import (
-    "encoding/json"
-    "log"
-    "net/http"
-    "fmt"
+	"encoding/json"
+	"log"
+	"net/http"
 )
 
 const (
@@ -64,7 +63,7 @@ func main() {
             return
         }
 
-        fmt.Println(":::Calling health check route:::")
+        log.Printf("HEALTH-CHECK | SERVER-NAME=$SERVER_NAME")
     })
 
     http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
