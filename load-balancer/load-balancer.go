@@ -37,7 +37,9 @@ type ServerPool struct {
 }
 
 func NewServerPool() *ServerPool {
-	return &ServerPool{}
+	return &ServerPool{
+		Servers: make([]*Server, 0),
+	}
 }
 
 func (sp *ServerPool) AddServer(newServer *Server) {
@@ -57,9 +59,13 @@ func (sp *ServerPool) RoundRobin() *Server {
 	sp.Mu.Lock()
 	defer sp.Mu.Unlock()
 
-	// Get the server according to round-robin algorithm
+	if len(sp.Servers) == 0 {
+		return nil
+	}
+
+	// Get the server according to the round-robin algorithm
 	server := sp.Servers[sp.Current%uint(len(sp.Servers))]
-	// Increment current state of server pool
+	// Increment current state of the server pool
 	sp.Current++
 
 	return server
@@ -98,15 +104,20 @@ func (sp *ServerPool) IPHash(clientIP string) *Server {
 // Health checker ensures that only healthy backend servers are used. It periodically checks each server by sending an HTTP request
 func (sp *ServerPool) HealthChecker() {
 	for {
+		if len(sp.Servers) == 0 {
+			time.Sleep(10 * time.Second)
+			continue
+		}
+
 		for _, server := range sp.Servers {
 			resp, err := http.Get(server.Address + "/health")
-			if err != nil && resp.StatusCode != http.StatusOK {
+			if err != nil || resp.StatusCode != http.StatusOK {
 				server.SetAlive(false)
 			} else {
 				server.SetAlive(true)
 			}
 		}
-		// Run health check for every 10 second
+		// Run health check every 10 seconds
 		time.Sleep(10 * time.Second)
 	}
 }

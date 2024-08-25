@@ -39,5 +39,7 @@ vendor/
 
 # Go module cache
 go.sum
+bin
+logs
 
 .env
