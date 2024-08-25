@@ -1,85 +1,119 @@
-// Load balancer package include all necessary methods and structs
-
 package loadbalancer
 
 import (
-	"fmt"
+	"context"
 	"io"
+	"math"
 	"math/rand"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 type Server struct {
-	Address      string       // Server address e.g http://localhost:8081
-	Alive        bool         // Use for health check
-	Mu           sync.RWMutex // Read-write mutex to work with concurrency
-	Connections  int
-	ResponseTime time.Duration // Track server response time
-	Weight       float64       // Dynamic weight based on performances
+	Address           string
+	Alive             bool
+	Mu                sync.RWMutex
+	Connections       int32         // Use atomic operations for connection counter
+	ResponseTime      time.Duration // Track server response time
+	Weight            float64       // Dynamic weight based on performance
+	FailureCount      int           // Track consecutive failures for circuit breaker
+	LastFailed        time.Time     // Last failed attempt time
+	CircuitBreaker    bool          // Circuit breaker state
+	BreakerThreshold  int           // Number of failures before tripping the circuit breaker
+	BreakerResetAfter time.Duration // Time after which the breaker resets
 }
 
 type ServerPool struct {
 	Servers []*Server
-	Current uint
 	Mu      sync.RWMutex
+	Logger  *zap.Logger
 }
 
-// Method to check server is active
+// NewServer initializes a new server with default values
+func NewServer(address string) *Server {
+	return &Server{
+		Address:           address,
+		Alive:             true,
+		ResponseTime:      10 * time.Millisecond,
+		BreakerThreshold:  5,
+		BreakerResetAfter: 1 * time.Minute,
+	}
+}
+
+// Method to check if the server is alive
 func (s *Server) IsAlive() bool {
-	s.Mu.RLock() // Read lock
+	s.Mu.RLock()
 	defer s.Mu.RUnlock()
-	return s.Alive
+	return s.Alive && !s.CircuitBreaker
 }
 
+// Set server status
 func (s *Server) SetAlive(alive bool) {
-	s.Mu.Lock() // Full write lock
+	s.Mu.Lock()
 	defer s.Mu.Unlock()
 	s.Alive = alive
 }
 
+// Increment the server's connection count
 func (s *Server) IncrementConnections() {
-	s.Mu.Lock()
-	defer s.Mu.Unlock()
-	s.Connections++
+	atomic.AddInt32(&s.Connections, 1)
 }
 
+// Decrement the server's connection count
 func (s *Server) DecrementConnections() {
+	atomic.AddInt32(&s.Connections, -1)
+}
+
+// Circuit breaker logic to avoid overloading failing servers
+func (s *Server) TripCircuitBreaker() {
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
-	if s.Connections > 0 {
-		s.Connections--
+	s.CircuitBreaker = true
+	s.LastFailed = time.Now()
+}
+
+// Reset the circuit breaker after a timeout
+func (s *Server) ResetCircuitBreaker() {
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	if time.Since(s.LastFailed) > s.BreakerResetAfter {
+		s.CircuitBreaker = false
+		s.FailureCount = 0
 	}
 }
 
-func NewServerPool() *ServerPool {
+func NewServerPool(logger *zap.Logger) *ServerPool {
 	return &ServerPool{
 		Servers: make([]*Server, 0),
+		Logger:  logger,
 	}
 }
 
+// Add a server to the server pool
 func (sp *ServerPool) AddServer(newServer *Server) {
 	sp.Mu.Lock()
 	defer sp.Mu.Unlock()
 	sp.Servers = append(sp.Servers, newServer)
 }
 
+// Get the count of available servers
 func (sp *ServerPool) GetServerCount() int {
 	sp.Mu.RLock()
 	defer sp.Mu.RUnlock()
 	return len(sp.Servers)
 }
 
-// Run the weight adjustment periodically to adapt to changing server conditions.
-func (sp *ServerPool) StartWeightAdjustment() {
-	for {
-		sp.AdjustWeights()
-		time.Sleep(10 * time.Second)
-	}
+// Start background processes for weight adjustment and health checks
+func (sp *ServerPool) StartBackgroundTasks(ctx context.Context) {
+	go sp.HealthChecker(ctx)
+	go sp.StartWeightAdjustment(ctx)
 }
 
-// Adjust the weights of servers dynamically based on their response time
+// Adjust server weights dynamically based on their performance
 func (sp *ServerPool) AdjustWeights() {
 	sp.Mu.Lock()
 	defer sp.Mu.Unlock()
@@ -88,23 +122,24 @@ func (sp *ServerPool) AdjustWeights() {
 
 	for _, server := range sp.Servers {
 		if server.IsAlive() {
+
 			responseTime := server.ResponseTime
 			if responseTime < minResponseTime {
 				responseTime = minResponseTime // Prevent division by zero or very small times
 			}
 
 			// Calculate weight based on response time and number of connections
-			serverWeight := 1.0 / (float64(responseTime.Milliseconds()) * float64(server.Connections+1))
+			serverWeight := math.Exp(-float64(responseTime.Milliseconds())/1000) / (1.0 + float64(server.Connections))
+
 			server.Weight = serverWeight
-			fmt.Printf("Adjusted Weight for %s: %f\n", server.Address, server.Weight)
 		}
 	}
 }
 
-// Dynamic weights to distribute requests more intelligently
+// Weighted round-robin selection based on server weights
 func (sp *ServerPool) WeightedRoundRobin() *Server {
-	sp.Mu.Lock()
-	defer sp.Mu.Unlock()
+	sp.Mu.RLock()
+	defer sp.Mu.RUnlock()
 
 	if len(sp.Servers) == 0 {
 		return nil
@@ -115,7 +150,6 @@ func (sp *ServerPool) WeightedRoundRobin() *Server {
 	for _, server := range sp.Servers {
 		if server.IsAlive() {
 			totalWeight += server.Weight
-			fmt.Printf("Server %s Weight: %f\n", server.Address, server.Weight)
 		}
 	}
 
@@ -124,13 +158,11 @@ func (sp *ServerPool) WeightedRoundRobin() *Server {
 	}
 
 	randWeight := rand.Float64() * totalWeight
-	fmt.Printf("Total Weight: %f, Random Weight: %f\n", totalWeight, randWeight)
 
 	for _, server := range sp.Servers {
 		if server.IsAlive() {
 			randWeight -= server.Weight
 			if randWeight <= 0 {
-				fmt.Printf("Selected Server: %s\n", server.Address)
 				return server
 			}
 		}
@@ -138,28 +170,55 @@ func (sp *ServerPool) WeightedRoundRobin() *Server {
 	return nil
 }
 
-// Health checker ensures that only healthy backend servers are used. It periodically checks each server by sending an HTTP request
-func (sp *ServerPool) HealthChecker() {
-	for {
-		if len(sp.Servers) == 0 {
-			time.Sleep(10 * time.Second)
-			continue
-		}
+// Health checker to monitor server status
+func (sp *ServerPool) HealthChecker(ctx context.Context) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
 
-		for _, server := range sp.Servers {
-			resp, err := http.Get(server.Address + "/health")
-			if err != nil || resp.StatusCode != http.StatusOK {
-				server.SetAlive(false)
-			} else {
-				server.SetAlive(true)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			for _, server := range sp.Servers {
+				go sp.CheckServerHealth(server)
 			}
 		}
-		// Run health check every 10 seconds
-		time.Sleep(10 * time.Second)
 	}
 }
 
-// Handles incoming HTTP requests, selects a backend server using the RoundRobin algorithm, and forwards the request to that server. It acts as a reverse proxy, managing the communication between the client and the backend server.
+// Check the health of a single server
+func (sp *ServerPool) CheckServerHealth(server *Server) {
+	resp, err := http.Get(server.Address + "/health")
+	if err != nil || resp.StatusCode != http.StatusOK {
+		server.SetAlive(false)
+		server.FailureCount++
+		if server.FailureCount >= server.BreakerThreshold {
+			server.TripCircuitBreaker()
+			sp.Logger.Warn("Server tripped circuit breaker", zap.String("server", server.Address))
+		}
+	} else {
+		server.SetAlive(true)
+		server.ResetCircuitBreaker()
+	}
+}
+
+// Start weight adjustment periodically
+func (sp *ServerPool) StartWeightAdjustment(ctx context.Context) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sp.AdjustWeights()
+		}
+	}
+}
+
+// ServeHTTP handles incoming HTTP requests and forwards them to a selected backend server
 func (sp *ServerPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	server := sp.WeightedRoundRobin()
 	if server == nil {
@@ -167,16 +226,17 @@ func (sp *ServerPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Increment the connection
 	server.IncrementConnections()
-	// Decrement the connection when this function execution is out of scope
 	defer server.DecrementConnections()
 
-	fmt.Printf("Server Address: %s | Alive: %t | Connections: %d | Server Weight: %f\n", server.Address, server.IsAlive(), server.Connections, server.Weight)
+	startTime := time.Now()
+
+	sp.Logger.Info("Forwarding request", zap.String("server", server.Address))
 
 	proxyReq, err := http.NewRequest(r.Method, server.Address+r.RequestURI, r.Body)
 	if err != nil {
 		http.Error(w, "Server unavailable", http.StatusServiceUnavailable)
+		sp.Logger.Error("Failed to create proxy request", zap.Error(err))
 		return
 	}
 
@@ -185,11 +245,20 @@ func (sp *ServerPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := client.Do(proxyReq)
 	if err != nil {
+		server.FailureCount++
+		if server.FailureCount >= server.BreakerThreshold {
+			server.TripCircuitBreaker()
+		}
 		http.Error(w, "Server unavailable", http.StatusServiceUnavailable)
+		sp.Logger.Error("Failed to forward request", zap.Error(err))
 		return
 	}
-
 	defer resp.Body.Close()
+
+	server.Mu.Lock()
+	server.ResponseTime = time.Since(startTime)
+	server.Mu.Unlock()
+
 	for name, values := range resp.Header {
 		w.Header()[name] = values
 	}
