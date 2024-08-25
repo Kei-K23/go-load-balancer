@@ -2,7 +2,12 @@
 
 package loadbalancer
 
-import "sync"
+import (
+	"hash/fnv"
+	"net/http"
+	"sync"
+	"time"
+)
 
 type Server struct {
 	Address     string       // Server address e.g http://localhost:8081
@@ -59,6 +64,7 @@ func (sp *ServerPool) RoundRobin() *Server {
 	return server
 }
 
+// Least connections algorithm forwards the request to the server with the fewest active connections
 func (sp *ServerPool) LeastConnections() *Server {
 	sp.Mu.RLock()
 	defer sp.Mu.Lock()
@@ -74,4 +80,32 @@ func (sp *ServerPool) LeastConnections() *Server {
 	}
 
 	return selectedServer
+}
+
+// IP hash algorithm maps client IP addresses to specific backend servers, providing session persistence
+func (sp *ServerPool) IPHash(clientIP string) *Server {
+	sp.Mu.RLock()
+	defer sp.Mu.RUnlock()
+
+	hash := fnv.New32a()
+	hash.Write([]byte(clientIP))
+	index := hash.Sum32() % uint32(len(sp.Servers))
+
+	return sp.Servers[index]
+}
+
+// Health checker ensures that only healthy backend servers are used. It periodically checks each server by sending an HTTP request
+func (sp *ServerPool) HealthChecker() {
+	for {
+		for _, server := range sp.Servers {
+			resp, err := http.Get(server.Address + "/health")
+			if err != nil && resp.StatusCode != http.StatusOK {
+				server.SetAlive(false)
+			} else {
+				server.SetAlive(true)
+			}
+		}
+		// Run health check for every 10 second
+		time.Sleep(10 * time.Second)
+	}
 }
