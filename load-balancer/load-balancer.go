@@ -2,6 +2,7 @@ package loadbalancer
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"math"
 	"math/rand"
@@ -10,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
+	"github.com/Kei-K23/go-load-balancer/logger"
 )
 
 type Server struct {
@@ -30,7 +31,7 @@ type Server struct {
 type ServerPool struct {
 	Servers []*Server
 	Mu      sync.RWMutex
-	Logger  *zap.Logger
+	Logger  *logger.Logger
 }
 
 // NewServer initializes a new server with default values
@@ -40,7 +41,7 @@ func NewServer(address string) *Server {
 		Alive:             true,
 		ResponseTime:      10 * time.Millisecond,
 		BreakerThreshold:  5,
-		BreakerResetAfter: 1 * time.Minute,
+		BreakerResetAfter: 1 * time.Minute, // Default to 1 minute that means Circuit breaker reset from Trip mode to Normal mode (Normal mode means the server is allow traffic again)
 	}
 }
 
@@ -69,6 +70,7 @@ func (s *Server) DecrementConnections() {
 }
 
 // Circuit breaker logic to avoid overloading failing servers
+// Activates the circuit breaker, preventing the server from being selected
 func (s *Server) TripCircuitBreaker() {
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
@@ -76,7 +78,7 @@ func (s *Server) TripCircuitBreaker() {
 	s.LastFailed = time.Now()
 }
 
-// Reset the circuit breaker after a timeout
+// Resets the circuit breaker if enough time has passed since the last failure (Default reset time is 1 minutes)
 func (s *Server) ResetCircuitBreaker() {
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
@@ -86,7 +88,7 @@ func (s *Server) ResetCircuitBreaker() {
 	}
 }
 
-func NewServerPool(logger *zap.Logger) *ServerPool {
+func NewServerPool(logger *logger.Logger) *ServerPool {
 	return &ServerPool{
 		Servers: make([]*Server, 0),
 		Logger:  logger,
@@ -119,6 +121,7 @@ func (sp *ServerPool) AdjustWeights() {
 	defer sp.Mu.Unlock()
 
 	minResponseTime := time.Millisecond * 1 // Minimum response time threshold to avoid division by zero
+	maxFailureCount := 10                   // Maximum failure count threshold to scale weight reduction
 
 	for _, server := range sp.Servers {
 		if server.IsAlive() {
@@ -130,6 +133,13 @@ func (sp *ServerPool) AdjustWeights() {
 
 			// Calculate weight based on response time and number of connections
 			serverWeight := math.Exp(-float64(responseTime.Milliseconds())/1000) / (1.0 + float64(server.Connections))
+
+			// Adjust weight based on failure count
+			failureFactor := float64(maxFailureCount-server.FailureCount) / float64(maxFailureCount)
+			if failureFactor < 0 {
+				failureFactor = 0 // Avoid negative values
+			}
+			serverWeight *= failureFactor
 
 			server.Weight = serverWeight
 		}
@@ -195,7 +205,7 @@ func (sp *ServerPool) CheckServerHealth(server *Server) {
 		server.FailureCount++
 		if server.FailureCount >= server.BreakerThreshold {
 			server.TripCircuitBreaker()
-			sp.Logger.Warn("Server tripped circuit breaker", zap.String("server", server.Address))
+			sp.Logger.Warn("Server tripped circuit breaker", fmt.Sprintf("server: %s", server.Address))
 		}
 	} else {
 		server.SetAlive(true)
@@ -231,12 +241,12 @@ func (sp *ServerPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	startTime := time.Now()
 
-	sp.Logger.Info("Forwarding request", zap.String("server", server.Address))
+	sp.Logger.Info("Forwarding request", fmt.Sprintf("server", server.Address))
 
 	proxyReq, err := http.NewRequest(r.Method, server.Address+r.RequestURI, r.Body)
 	if err != nil {
 		http.Error(w, "Server unavailable", http.StatusServiceUnavailable)
-		sp.Logger.Error("Failed to create proxy request", zap.Error(err))
+		sp.Logger.Error("Failed to create proxy request", fmt.Sprintf("%s", err))
 		return
 	}
 
@@ -250,7 +260,7 @@ func (sp *ServerPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			server.TripCircuitBreaker()
 		}
 		http.Error(w, "Server unavailable", http.StatusServiceUnavailable)
-		sp.Logger.Error("Failed to forward request", zap.Error(err))
+		sp.Logger.Error("Failed to forward request", fmt.Sprintf("%s", err))
 		return
 	}
 	defer resp.Body.Close()

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	loadbalancer "github.com/Kei-K23/go-load-balancer/load-balancer"
-	"go.uber.org/zap"
+	"github.com/Kei-K23/go-load-balancer/logger"
 )
 
 const (
@@ -17,8 +17,7 @@ const (
 )
 
 func main() {
-	logger, _ := zap.NewProduction()
-	defer logger.Sync()
+	logger := logger.NewLogger()
 
 	serverPool := loadbalancer.NewServerPool(logger)
 
@@ -35,7 +34,6 @@ func main() {
 		Handler: http.HandlerFunc(serverPool.ServeHTTP),
 	}
 
-	// Graceful shutdown handling
 	go func() {
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
@@ -45,20 +43,19 @@ func main() {
 
 		cancel()
 
-		// Create a deadline to wait for current requests to complete
 		ctxShutDown, cancelShutDown := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancelShutDown()
 
 		if err := server.Shutdown(ctxShutDown); err != nil {
-			logger.Fatal("Server Shutdown Failed", zap.Error(err))
+			logger.Error("Server Shutdown Failed: %v", err)
 		}
 
 		logger.Info("Load Balancer shutdown gracefully")
 	}()
 
-	logger.Info("Load Balancer started on :8080")
+	logger.Info("Load Balancer started on %s", SERVER_PORT)
 
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		logger.Fatal("Server failed", zap.Error(err))
+		logger.Error("Server failed: %v", err)
 	}
 }
