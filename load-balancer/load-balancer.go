@@ -58,3 +58,20 @@ func (sp *ServerPool) RoundRobin() *Server {
 
 	return server
 }
+
+func (sp *ServerPool) LeastConnections() *Server {
+	sp.Mu.RLock()
+	defer sp.Mu.Lock()
+
+	var selectedServer *Server
+	minConnections := int(^uint(0) >> 1)
+
+	for _, server := range sp.Servers {
+		if server.IsAlive() && server.Connections < minConnections {
+			minConnections = server.Connections
+			selectedServer = server
+		}
+	}
+
+	return selectedServer
+}
