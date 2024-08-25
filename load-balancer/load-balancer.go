@@ -3,6 +3,7 @@
 package loadbalancer
 
 import (
+	"fmt"
 	"hash/fnv"
 	"io"
 	"net/http"
@@ -63,18 +64,33 @@ func (sp *ServerPool) RoundRobin() *Server {
 		return nil
 	}
 
-	// Get the server according to the round-robin algorithm
-	server := sp.Servers[sp.Current%uint(len(sp.Servers))]
-	// Increment current state of the server pool
-	sp.Current++
+	startIndex := sp.Current
+	for {
+		// Get the server according to the round-robin algorithm
+		server := sp.Servers[sp.Current%uint(len(sp.Servers))]
 
-	return server
+		// Increment current state of the server pool
+		sp.Current++
+
+		// If the server is alive, return it
+		if server.IsAlive() {
+			return server
+		}
+
+		// If we've looped through all servers and none are alive, return nil
+		if sp.Current%uint(len(sp.Servers)) == startIndex {
+			return nil
+		}
+	}
 }
 
 // Least connections algorithm forwards the request to the server with the fewest active connections
 func (sp *ServerPool) LeastConnections() *Server {
 	sp.Mu.RLock()
 	defer sp.Mu.Lock()
+	if len(sp.Servers) == 0 {
+		return nil
+	}
 
 	var selectedServer *Server
 	minConnections := int(^uint(0) >> 1)
@@ -125,32 +141,33 @@ func (sp *ServerPool) HealthChecker() {
 // Handles incoming HTTP requests, selects a backend server using the RoundRobin algorithm, and forwards the request to that server. It acts as a reverse proxy, managing the communication between the client and the backend server.
 func (sp *ServerPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	server := sp.RoundRobin()
-
-	if server != nil && server.IsAlive() {
-		proxyReq, err := http.NewRequest(r.Method, server.Address+r.RequestURI, r.Body)
-
-		if err != nil {
-			http.Error(w, "Server unavailable", http.StatusServiceUnavailable)
-			return
-		}
-
-		proxyReq.Header = r.Header
-		client := &http.Client{}
-
-		resp, err := client.Do(proxyReq)
-		if err != nil {
-			http.Error(w, "Server unavailable", http.StatusServiceUnavailable)
-			return
-		}
-
-		defer resp.Body.Close()
-		for name, values := range resp.Header {
-			w.Header()[name] = values
-		}
-
-		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, resp.Body)
-	} else {
+	if server == nil {
 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
 	}
+
+	fmt.Printf("Server Address: %s | Alive: %t | Connections: %d\n", server.Address, server.IsAlive(), server.Connections)
+
+	proxyReq, err := http.NewRequest(r.Method, server.Address+r.RequestURI, r.Body)
+	if err != nil {
+		http.Error(w, "Server unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	proxyReq.Header = r.Header
+	client := &http.Client{}
+
+	resp, err := client.Do(proxyReq)
+	if err != nil {
+		http.Error(w, "Server unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	defer resp.Body.Close()
+	for name, values := range resp.Header {
+		w.Header()[name] = values
+	}
+
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }

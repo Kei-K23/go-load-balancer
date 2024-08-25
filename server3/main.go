@@ -18,10 +18,10 @@ func main() {
 			"message": fmt.Sprintf("This is health response from %s", SERVER_ADDR),
 		})
 	})
-	r.GET("/ping", func(c *gin.Context) {
+	r.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"message": "pong",
-			"address": SERVER_ADDR,
+			"address": fmt.Sprintf("Backend server address: %s", SERVER_ADDR),
 		})
 	})
 	r.Run(SERVER_ADDR)
