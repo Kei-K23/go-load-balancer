@@ -5,7 +5,6 @@ package loadbalancer
 import (
 	"fmt"
 	"io"
-	"math"
 	"math/rand"
 	"net/http"
 	"sync"
@@ -40,6 +39,20 @@ func (s *Server) SetAlive(alive bool) {
 	s.Alive = alive
 }
 
+func (s *Server) IncrementConnections() {
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	s.Connections++
+}
+
+func (s *Server) DecrementConnections() {
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	if s.Connections > 0 {
+		s.Connections--
+	}
+}
+
 func NewServerPool() *ServerPool {
 	return &ServerPool{
 		Servers: make([]*Server, 0),
@@ -56,25 +69,6 @@ func (sp *ServerPool) GetServerCount() int {
 	sp.Mu.RLock()
 	defer sp.Mu.RUnlock()
 	return len(sp.Servers)
-}
-
-// Selects the server with the lowest response time
-func (sp *ServerPool) AdaptiveSelection() *Server {
-	sp.Mu.RLock()
-	defer sp.Mu.RUnlock()
-
-	var selectedServer *Server
-
-	minResponseTime := time.Duration(math.MaxInt64)
-
-	for _, server := range sp.Servers {
-		if server.IsAlive() && server.ResponseTime < minResponseTime {
-			minResponseTime = server.ResponseTime
-			selectedServer = server
-		}
-	}
-
-	return selectedServer
 }
 
 // Run the weight adjustment periodically to adapt to changing server conditions.
@@ -98,7 +92,10 @@ func (sp *ServerPool) AdjustWeights() {
 			if responseTime < minResponseTime {
 				responseTime = minResponseTime // Prevent division by zero or very small times
 			}
-			server.Weight = 1.0 / float64(responseTime.Milliseconds())
+
+			// Calculate weight based on response time and number of connections
+			serverWeight := 1.0 / (float64(responseTime.Milliseconds()) * float64(server.Connections+1))
+			server.Weight = serverWeight
 			fmt.Printf("Adjusted Weight for %s: %f\n", server.Address, server.Weight)
 		}
 	}
@@ -170,7 +167,12 @@ func (sp *ServerPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Printf("Server Address: %s | Alive: %t\n", server.Address, server.IsAlive())
+	// Increment the connection
+	server.IncrementConnections()
+	// Decrement the connection when this function execution is out of scope
+	defer server.DecrementConnections()
+
+	fmt.Printf("Server Address: %s | Alive: %t | Connections: %d | Server Weight: %f\n", server.Address, server.IsAlive(), server.Connections, server.Weight)
 
 	proxyReq, err := http.NewRequest(r.Method, server.Address+r.RequestURI, r.Body)
 	if err != nil {
