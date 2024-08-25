@@ -4,7 +4,7 @@
 url="http://localhost:8080"
 
 # Number of requests to send
-requests=5000
+requests=50000
 
 # Log the start time
 start_time=$(date +%s)

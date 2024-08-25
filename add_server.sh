@@ -64,7 +64,7 @@ func main() {
             return
         }
 
-        fmt.Printf(":::Calling health check route:::")
+        fmt.Println(":::Calling health check route:::")
     })
 
     http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

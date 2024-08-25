@@ -43,3 +43,5 @@ bin
 logs
 
 .env
+services.list
+server*/
