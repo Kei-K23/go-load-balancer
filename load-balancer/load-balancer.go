@@ -4,18 +4,27 @@ package loadbalancer
 
 import (
 	"fmt"
-	"hash/fnv"
 	"io"
+	"math"
+	"math/rand"
 	"net/http"
 	"sync"
 	"time"
 )
 
 type Server struct {
-	Address     string       // Server address e.g http://localhost:8081
-	Alive       bool         // Use for health check
-	Mu          sync.RWMutex // Read-write mutex to work with concurrency
-	Connections int          // To track how many user is connected to the server
+	Address      string       // Server address e.g http://localhost:8081
+	Alive        bool         // Use for health check
+	Mu           sync.RWMutex // Read-write mutex to work with concurrency
+	Connections  int
+	ResponseTime time.Duration // Track server response time
+	Weight       float64       // Dynamic weight based on performances
+}
+
+type ServerPool struct {
+	Servers []*Server
+	Current uint
+	Mu      sync.RWMutex
 }
 
 // Method to check server is active
@@ -29,12 +38,6 @@ func (s *Server) SetAlive(alive bool) {
 	s.Mu.Lock() // Full write lock
 	defer s.Mu.Unlock()
 	s.Alive = alive
-}
-
-type ServerPool struct {
-	Servers []*Server
-	Current uint
-	Mu      sync.RWMutex
 }
 
 func NewServerPool() *ServerPool {
@@ -55,49 +58,18 @@ func (sp *ServerPool) GetServerCount() int {
 	return len(sp.Servers)
 }
 
-// Round-robin algorithm cycles through the list of servers, distributing requests evenly
-func (sp *ServerPool) RoundRobin() *Server {
-	sp.Mu.Lock()
-	defer sp.Mu.Unlock()
-
-	if len(sp.Servers) == 0 {
-		return nil
-	}
-
-	startIndex := sp.Current
-	for {
-		// Get the server according to the round-robin algorithm
-		server := sp.Servers[sp.Current%uint(len(sp.Servers))]
-
-		// Increment current state of the server pool
-		sp.Current++
-
-		// If the server is alive, return it
-		if server.IsAlive() {
-			return server
-		}
-
-		// If we've looped through all servers and none are alive, return nil
-		if sp.Current%uint(len(sp.Servers)) == startIndex {
-			return nil
-		}
-	}
-}
-
-// Least connections algorithm forwards the request to the server with the fewest active connections
-func (sp *ServerPool) LeastConnections() *Server {
+// Selects the server with the lowest response time
+func (sp *ServerPool) AdaptiveSelection() *Server {
 	sp.Mu.RLock()
-	defer sp.Mu.Lock()
-	if len(sp.Servers) == 0 {
-		return nil
-	}
+	defer sp.Mu.RUnlock()
 
 	var selectedServer *Server
-	minConnections := int(^uint(0) >> 1)
+
+	minResponseTime := time.Duration(math.MaxInt64)
 
 	for _, server := range sp.Servers {
-		if server.IsAlive() && server.Connections < minConnections {
-			minConnections = server.Connections
+		if server.IsAlive() && server.ResponseTime < minResponseTime {
+			minResponseTime = server.ResponseTime
 			selectedServer = server
 		}
 	}
@@ -105,16 +77,59 @@ func (sp *ServerPool) LeastConnections() *Server {
 	return selectedServer
 }
 
-// IP hash algorithm maps client IP addresses to specific backend servers, providing session persistence
-func (sp *ServerPool) IPHash(clientIP string) *Server {
-	sp.Mu.RLock()
-	defer sp.Mu.RUnlock()
+// Run the weight adjustment periodically to adapt to changing server conditions.
+func (sp *ServerPool) StartWeightAdjustment() {
+	for {
+		sp.AdjustWeights()
+		time.Sleep(10 * time.Second)
+	}
+}
 
-	hash := fnv.New32a()
-	hash.Write([]byte(clientIP))
-	index := hash.Sum32() % uint32(len(sp.Servers))
+// Adjust the weights of servers dynamically based on their response time
+func (sp *ServerPool) AdjustWeights() {
+	sp.Mu.Lock()
+	defer sp.Mu.Unlock()
 
-	return sp.Servers[index]
+	for _, server := range sp.Servers {
+		if server.IsAlive() {
+			server.Weight = 1.0 / float64(server.ResponseTime.Milliseconds())
+		}
+	}
+}
+
+// Dynamic weights to distribute requests more intelligently
+func (sp *ServerPool) WeightedRoundRobin() *Server {
+	sp.Mu.Lock()
+	defer sp.Mu.Unlock()
+
+	if len(sp.Servers) == 0 {
+		return nil
+	}
+
+	totalWeight := 0.0
+
+	for _, server := range sp.Servers {
+		if server.IsAlive() {
+			totalWeight += server.Weight
+		}
+	}
+
+	if totalWeight == 0 {
+		return nil
+	}
+
+	randWeight := rand.Float64() * totalWeight
+
+	// The idea of this loop and subtracting from randomWeight is that servers with higher weights have larger "ranges" and are therefore more likely to be selected by the random weight
+	for _, server := range sp.Servers {
+		if server.IsAlive() {
+			randWeight -= server.Weight
+			if randWeight <= 0 {
+				return server
+			}
+		}
+	}
+	return nil
 }
 
 // Health checker ensures that only healthy backend servers are used. It periodically checks each server by sending an HTTP request
@@ -140,13 +155,13 @@ func (sp *ServerPool) HealthChecker() {
 
 // Handles incoming HTTP requests, selects a backend server using the RoundRobin algorithm, and forwards the request to that server. It acts as a reverse proxy, managing the communication between the client and the backend server.
 func (sp *ServerPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	server := sp.RoundRobin()
+	server := sp.WeightedRoundRobin()
 	if server == nil {
 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
-	fmt.Printf("Server Address: %s | Alive: %t | Connections: %d\n", server.Address, server.IsAlive(), server.Connections)
+	fmt.Printf("Server Address: %s | Alive: %t\n", server.Address, server.IsAlive())
 
 	proxyReq, err := http.NewRequest(r.Method, server.Address+r.RequestURI, r.Body)
 	if err != nil {

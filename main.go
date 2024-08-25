@@ -19,14 +19,6 @@ func main() {
 	// Add backend servers
 	serverPool.AddServer(&loadbalancer.Server{Address: "http://localhost:8081", Alive: true})
 	serverPool.AddServer(&loadbalancer.Server{Address: "http://localhost:8082", Alive: true})
-	serverPool.AddServer(&loadbalancer.Server{Address: "http://localhost:8083", Alive: true})
-	serverPool.AddServer(&loadbalancer.Server{Address: "http://localhost:8084", Alive: true})
-	serverPool.AddServer(&loadbalancer.Server{Address: "http://localhost:8085", Alive: true})
-	serverPool.AddServer(&loadbalancer.Server{Address: "http://localhost:8086", Alive: true})
-	serverPool.AddServer(&loadbalancer.Server{Address: "http://localhost:8087", Alive: true})
-	serverPool.AddServer(&loadbalancer.Server{Address: "http://localhost:8088", Alive: true})
-	serverPool.AddServer(&loadbalancer.Server{Address: "http://localhost:8089", Alive: true})
-	serverPool.AddServer(&loadbalancer.Server{Address: "http://localhost:8090", Alive: true})
 
 	// Check servers health concurrently
 	go serverPool.HealthChecker()
