@@ -4,15 +4,23 @@
 PROJECT_ROOT=$(pwd)
 BIN_DIR="$PROJECT_ROOT/bin"
 LOG_DIR="$PROJECT_ROOT/logs"
-SERVICES=("app1" "app2" "app3" "app4")
+SERVICES=("loadbalancer" "server1" "server2" "server3")
 
 # Function to build all services
 build_services() {
     echo "Building services..."
     mkdir -p $BIN_DIR
     for service in "${SERVICES[@]}"; do
-        echo "Building $service..."
-        go build -o $BIN_DIR/$service $PROJECT_ROOT/cmd/$service
+        if [ "$service" == "loadbalancer" ]; then
+            # Build the load balancer which is located in the root directory
+            echo "Building load balancer..."
+            go build -o $BIN_DIR/$service $PROJECT_ROOT/main.go
+        else
+            # Build the servers which are located in their respective folders
+            echo "Building $service..."
+            go build -o $BIN_DIR/$service $PROJECT_ROOT/$service/main.go
+        fi
+        
         if [ $? -ne 0 ]; then
             echo "Build failed for $service!"
             exit 1
