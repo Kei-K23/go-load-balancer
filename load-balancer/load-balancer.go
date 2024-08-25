@@ -90,9 +90,16 @@ func (sp *ServerPool) AdjustWeights() {
 	sp.Mu.Lock()
 	defer sp.Mu.Unlock()
 
+	minResponseTime := time.Millisecond * 1 // Minimum response time threshold to avoid division by zero
+
 	for _, server := range sp.Servers {
 		if server.IsAlive() {
-			server.Weight = 1.0 / float64(server.ResponseTime.Milliseconds())
+			responseTime := server.ResponseTime
+			if responseTime < minResponseTime {
+				responseTime = minResponseTime // Prevent division by zero or very small times
+			}
+			server.Weight = 1.0 / float64(responseTime.Milliseconds())
+			fmt.Printf("Adjusted Weight for %s: %f\n", server.Address, server.Weight)
 		}
 	}
 }
@@ -111,6 +118,7 @@ func (sp *ServerPool) WeightedRoundRobin() *Server {
 	for _, server := range sp.Servers {
 		if server.IsAlive() {
 			totalWeight += server.Weight
+			fmt.Printf("Server %s Weight: %f\n", server.Address, server.Weight)
 		}
 	}
 
@@ -119,12 +127,13 @@ func (sp *ServerPool) WeightedRoundRobin() *Server {
 	}
 
 	randWeight := rand.Float64() * totalWeight
+	fmt.Printf("Total Weight: %f, Random Weight: %f\n", totalWeight, randWeight)
 
-	// The idea of this loop and subtracting from randomWeight is that servers with higher weights have larger "ranges" and are therefore more likely to be selected by the random weight
 	for _, server := range sp.Servers {
 		if server.IsAlive() {
 			randWeight -= server.Weight
 			if randWeight <= 0 {
+				fmt.Printf("Selected Server: %s\n", server.Address)
 				return server
 			}
 		}
