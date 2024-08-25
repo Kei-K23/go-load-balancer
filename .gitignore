@@ -1,1 +1,43 @@
+# Binaries for programs and plugins
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go vendor directory (if not using Go modules)
+vendor/
+
+# Output of go build and go test
+*.out
+
+# Log files
+*.log
+
+# Temporary files created by editors and IDEs
+*.swp
+*.swo
+*.tmp
+*~
+*.bak
+
+# MacOS specific files
+.DS_Store
+
+# Go build cache
+/tmp/
+*.tmp
+*.test
+
+# Dependency directories
+.gopath/
+.gomod/
+
+# IDE settings (e.g., VSCode, GoLand)
+.idea/
+.vscode/
+*.iml
+
+# Go module cache
+go.sum
+
 .env

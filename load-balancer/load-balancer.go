@@ -4,6 +4,7 @@ package loadbalancer
 
 import (
 	"hash/fnv"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -107,5 +108,38 @@ func (sp *ServerPool) HealthChecker() {
 		}
 		// Run health check for every 10 second
 		time.Sleep(10 * time.Second)
+	}
+}
+
+// Handles incoming HTTP requests, selects a backend server using the RoundRobin algorithm, and forwards the request to that server. It acts as a reverse proxy, managing the communication between the client and the backend server.
+func (sp *ServerPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	server := sp.RoundRobin()
+
+	if server != nil && server.IsAlive() {
+		proxyReq, err := http.NewRequest(r.Method, server.Address+r.RequestURI, r.Body)
+
+		if err != nil {
+			http.Error(w, "Server unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		proxyReq.Header = r.Header
+		client := &http.Client{}
+
+		resp, err := client.Do(proxyReq)
+		if err != nil {
+			http.Error(w, "Server unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		defer resp.Body.Close()
+		for name, values := range resp.Header {
+			w.Header()[name] = values
+		}
+
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	} else {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
 	}
 }
