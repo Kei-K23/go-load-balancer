@@ -39,11 +39,12 @@ import (
     "encoding/json"
     "log"
     "net/http"
+    "fmt"
 )
 
 const (
 	PORT        = ":$PORT"
-	SERVER_NAME = ":$SERVER_NAME"
+	SERVER_NAME = "$SERVER_NAME"
 )
 
 func main() {
@@ -62,6 +63,8 @@ func main() {
             http.Error(w, "Failed to encode JSON", http.StatusInternalServerError)
             return
         }
+
+        fmt.Printf(":::Calling health check route:::")
     })
 
     http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -81,7 +84,7 @@ func main() {
         }
     })
 
-    log.Printf("Server $SERVER_NAME started on %s", PORT)
+    log.Printf("Server name $SERVER_NAME started on %s", PORT)
     log.Fatal(http.ListenAndServe(PORT, nil))
 }
 EOL
